@@ -5,7 +5,7 @@
 
 class Inversion {
 public:
-    // Reverse segment [l, r]
+    //reversing a part of DNA
     static void invert(Sequence& seq, int left, int right);
 };
 

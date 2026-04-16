@@ -1,3 +1,4 @@
+//since GC bonds are stronger than AT bonds so GC content is important for stability of DNA and for pattern recognition
 #ifndef GCCONTENT_H
 #define GCCONTENT_H
 
@@ -5,7 +6,7 @@
 
 class GCContent {
 public:
-    // Calculate GC % in range [l, r]
+    //calculating GC % 
     static double calculate(Sequence& seq, int left, int right);
 };
 

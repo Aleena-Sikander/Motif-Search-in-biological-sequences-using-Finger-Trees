@@ -1,3 +1,4 @@
+//generic fingertree stucture
 #ifndef FINGERTREE_H
 #define FINGERTREE_H
 
@@ -9,8 +10,8 @@ template <typename T>
 class FingerTree {
 private:
     struct Node {
-        T value;
-        int size;
+        T value; //DNA character
+        int size; //subtree size
 
         std::shared_ptr<Node> left;
         std::shared_ptr<Node> right;
@@ -23,19 +24,16 @@ private:
 public:
     FingerTree();
 
-    // Basic operations
     void append(const T& value);
     void prepend(const T& value);
 
-    // Split & concatenate
     FingerTree<T> split(int index);
-    void concatenate(FingerTree<T>& other);
+    void concat(FingerTree<T>& other);
 
-    // Access
     T lookup(int index) const;
     int getSize() const;
 
-    // Convert to list/string
+    //converting to list
     std::vector<T> toVector() const;
 };
 

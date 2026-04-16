@@ -1,3 +1,4 @@
+//specific to DNA sequence management using Finger Trees
 #ifndef SEQUENCE_H
 #define SEQUENCE_H
 
@@ -17,8 +18,7 @@ public:
     void remove(int index);
     void update(int index, char value);
 
-    // Utilities
-    int length() const;
+    int length() const; //total DNA length
     std::string toString() const;
 
     FingerTree<char>& getTree();

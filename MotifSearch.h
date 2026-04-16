@@ -7,7 +7,7 @@
 
 class MotifSearch {
 public:
-    // Returns all starting indices of motif
+    //to find pattern, returns all starting indices of motif
     static std::vector<int> findMotif(Sequence& seq, const std::string& motif);
 };
 
