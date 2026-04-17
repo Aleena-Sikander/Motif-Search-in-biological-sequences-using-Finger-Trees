@@ -4,28 +4,17 @@
 using namespace std;
 
 int main() {
+    std::shared_ptr<FingerTree> s1 = std::make_shared<Empty>(), s2 = std::make_shared<Empty>();
+    for (char c : std::string("ATGC")) s1 = pushBack(s1, std::make_shared<Base>(c));
+    for (char c : std::string("GCTA")) s2 = pushBack(s2, std::make_shared<Base>(c));
 
-    Sequence seq("ATGCGT");
-    // Sequence seq("AAAAAA");
-    // Sequence seq("ATATAT");
-    // Sequence seq("GCGCGC");
+    std::string out1, out2, outComb;
+    getSequence(s1, out1); getSequence(s2, out2);
+    auto combined = concat(s1, s2);
+    getSequence(combined, outComb);
 
-    cout << "Original: " << seq.toString() << endl;
-
-    // INSERT
-    seq.insert(2, 'A');
-    cout << "After insert: " << seq.toString() << endl;
-
-    // DELETE
-    seq.remove(3);
-    cout << "After delete: " << seq.toString() << endl;
-
-    // UPDATE
-    seq.update(1, 'G');
-    cout << "After update: " << seq.toString() << endl;
-
-    // LENGTH
-    cout << "Length: " << seq.length() << endl;
-
+    std::cout << "Seq 1: " << out1 << " (Size: " << s1->getMeasure().size << ")\n";
+    std::cout << "Seq 2: " << out2 << " (Size: " << s2->getMeasure().size << ")\n";
+    std::cout << "Combined: " << outComb << " (Size: " << combined->getMeasure().size << ")\n";
     return 0;
 }
