@@ -1,38 +1,54 @@
-//generic fingertree stucture
 /*
  * FingerTree.h
  * ------------
- * WHY DO WE NEED THIS FILE?
- *   Think of a Finger Tree like a very smart bookshelf. A regular array is like a
- *   bookshelf where you can only grab books from the middle (slow!). A Finger Tree
- *   lets you grab from BOTH ends instantly, and split or join shelves in O(log n)
- *   time. For a DNA sequence of millions of characters, this matters enormously.
+ * The heart of the entire project.
  *
- *   This is the HEART of the entire project. Every other file (Sequence, MotifSearch,
- *   GCContent, Inversion) depends on what is defined here.
+ * WHAT IS A FINGER TREE? (plain English)
+ * ----------------------------------------
+ * Imagine a very long necklace of DNA beads (A, T, G, C).
+ * A regular array is like laying the necklace flat on a table —
+ * finding the middle bead means counting from one end every time.
  *
- * REAL-WORLD ANALOGY:
- *   Imagine a train where you always need to add/remove carriages from either end,
- *   and occasionally split the train in half or merge two trains. A linked list is
- *   slow in the middle. A Finger Tree puts "fingers" (fast access points) on both
- *   ends so those operations are cheap.
+ * A Finger Tree is like holding the necklace with both hands ("fingers"):
+ *   - Your LEFT hand grips a few beads at the front  (prefix)
+ *   - Your RIGHT hand grips a few beads at the back   (suffix)
+ *   - Everything in the middle is bundled neatly into groups (nodes)
  *
- * KEY OPERATIONS AND THEIR TIME COMPLEXITIES:
- *   - pushFront / pushBack   → O(1) amortised  (add a DNA base to either end)
- *   - split(i)               → O(log n)         (cut the sequence at position i)
- *   - concat(t1, t2)         → O(log n)         (glue two sequences together)
- *   - lookup(i)              → O(log n)         (read base at position i)
+ * Because you're already touching both ends, adding or removing a bead
+ * from either end is nearly instant (O(1) amortised).
+ * Splitting the necklace in half, or joining two necklaces, only takes
+ * O(log n) steps — much faster than rebuilding from scratch.
  *
- * STRUCTURE OVERVIEW:
- *   A FingerTree is one of three shapes:
- *     Empty  — the tree has no elements.
- *     Single — exactly one element.
- *     Deep   — has a prefix (up to 4 elements), a recursive middle spine,
- *              and a suffix (up to 4 elements). The middle holds Node objects
- *              that group children in groups of 2 or 3.
+ * WHY DO WE NEED THIS FOR THE PROJECT?
+ * --------------------------------------
+ * DNA sequences can be millions of characters long. The project needs to:
+ *   1. Search for a short pattern (motif) inside that long sequence
+ *   2. Insert/delete/update individual bases (gene editing)
+ *   3. Cut out a chunk and flip it (chromosomal inversion)
+ *   4. Measure the G/C content of any range
  *
- *   Cached "measurements" (just the size count for this project) are stored at
- *   every internal node so we can navigate without scanning the whole tree.
+ * A plain std::string or std::vector makes cuts and joins O(n) — slow.
+ * The Finger Tree makes them O(log n) — fast even on huge genomes.
+ *
+ * NOTE ON YOUR IMPLEMENTATION vs YOUR FRIEND'S
+ * ----------------------------------------------
+ * Your friend's implementation (the single-file main.cpp) is a TRUE
+ * Finger Tree: it has prefix/suffix fingers, internal 2-3 nodes, cached
+ * size measurements (the Monoid), O(log n) split, and O(log n) concat
+ * via app3().  It is architecturally correct.
+ *
+ * YOUR implementation in FingerTrees.cpp is actually a LINKED LIST
+ * disguised as a Finger Tree.  The Node struct has only `left` and
+ * `right` pointers (making it a doubly-linked list), and the critical
+ * operations split() and concat() are left as placeholders that do
+ * nothing.  The project cannot currently do motif search, GC content,
+ * or inversion correctly because those all depend on split/concat.
+ *
+ * RECOMMENDATION:
+ *   Adopt your friend's structural design (Empty / Single / Deep with
+ *   real prefix+suffix+middle) but keep YOUR modular file layout
+ *   (Sequence.h, MotifSearch.h, GCContent.h, Inversion.h, Utils.h).
+ *   That gives you the best of both worlds.
  */
 
 #ifndef FINGERTREE_H
@@ -41,229 +57,299 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <functional>
 
-// ---------------------------------------------------------------------------
-// Measure (Monoid)
-// ---------------------------------------------------------------------------
 /*
- * WHY A Measure?
- *   Every node in the tree caches a small piece of summary information called
- *   a "measure". Here the measure is simply the count of DNA bases under that
- *   node. Because it is a monoid (it has a zero = {0} and can be combined with
- *   +), the tree can propagate it automatically.
+ * Measure (the Monoid)
+ * ---------------------
+ * Every node in the tree caches a small summary of everything beneath it.
+ * Right now the summary is just the total number of characters (size).
  *
- *   When you later want to split at position 50, the tree checks the cached
- *   size of each subtree and decides which branch to descend into — exactly
- *   like binary search. Without the cached measure you would have to count
- *   every leaf manually, turning an O(log n) split into O(n).
+ * WHY: When searching for a motif at position i, we can look at a node's
+ * cached size and immediately know "the match can't start here — this
+ * whole subtree has only 3 chars but the motif is 5 chars long".
+ * We skip entire branches without touching individual characters.
+ * That is what makes O(log n) search possible.
+ *
+ * You can extend Measure later to cache prefix/suffix substrings so
+ * motif candidates that straddle node boundaries are also caught quickly.
  */
 struct Measure {
-    size_t size;   // number of DNA bases in this subtree
+    size_t size;   // total number of DNA characters in this subtree
 
-    /* Combine two measures (used when building internal nodes) */
+    // Combining two measures: just add their sizes.
+    // This "addition" is the monoid operation.
     Measure operator+(const Measure& other) const {
         return { size + other.size };
     }
 };
 
-// ---------------------------------------------------------------------------
-// Measured (interface)
-// ---------------------------------------------------------------------------
 /*
- * WHY AN INTERFACE?
- *   Both individual DNA bases (Base) and internal grouping nodes (Node) need
- *   to report a measure. Making them share this interface lets the tree treat
- *   them uniformly without caring which one it currently holds.
+ * Measured (interface)
+ * ---------------------
+ * Anything that can live inside the tree (a single DNA base, or an
+ * internal node grouping several bases) must be able to:
+ *   1. Report its measure (size)
+ *   2. Write its characters into an output string
  */
 struct Measured {
     virtual ~Measured() = default;
 
-    /* Return the cached measure for this element or subtree. */
+    // Returns the cached size of this element.
     virtual Measure getMeasure() const = 0;
 
-    /* Append every leaf character to 'out'. Used to reconstruct a string. */
+    // Appends all DNA characters under this element to `out`.
     virtual void gatherBases(std::string& out) const = 0;
 };
 
-// ---------------------------------------------------------------------------
-// Base (a single DNA character: A, T, G, or C)
-// ---------------------------------------------------------------------------
 /*
- * WHY A SEPARATE CLASS FOR A SINGLE CHARACTER?
- *   In a plain std::string a character is just a byte. Here we wrap it so it
- *   can participate in the Measured interface — it reports a size of 1 and
- *   knows how to append itself to an output string. These are the LEAVES of
- *   the tree.
+ * Base
+ * -----
+ * A single DNA character: 'A', 'T', 'G', or 'C'.
+ * This is a LEAF of the finger tree — the actual data being stored.
+ *
+ * WHY: The tree stores characters as leaf objects so every node can hold
+ * a uniform Measured* pointer regardless of whether it points to a
+ * single base or a grouped node.
  */
 struct Base : public Measured {
-    char nucleotide;   // one of 'A', 'T', 'G', 'C'
+    char type;   // one of: A, T, G, C (or amino acid letters for proteins)
 
-    explicit Base(char c) : nucleotide(c) {}
+    explicit Base(char t);
 
-    /* A single base always has size 1. */
-    Measure getMeasure() const override { return { 1 }; }
+    // A single base always has measure {1} — it contributes exactly one
+    // character to the total size.
+    Measure getMeasure() const override;
 
-    /* Append this nucleotide to the accumulator string. */
-    void gatherBases(std::string& out) const override { out += nucleotide; }
-};
-
-// ---------------------------------------------------------------------------
-// Node (internal 2-3 grouping node)
-// ---------------------------------------------------------------------------
-/*
- * WHY GROUP ELEMENTS INTO NODES?
- *   The Finger Tree stores bases individually only at the outer "digits"
- *   (prefix/suffix). Elements that get pushed into the inner spine are
- *   first bundled into Node objects containing 2 or 3 children. This
- *   bundling keeps the tree height logarithmic even for very long sequences.
- *
- *   Think of it as packing books into boxes before putting them on the
- *   high shelf — you handle fewer items at each level.
- */
-struct Node : public Measured {
-    std::vector<std::shared_ptr<Measured>> children;  // 2 or 3 children
-    Measure cached;   // pre-computed total size of all children
-
-    explicit Node(std::vector<std::shared_ptr<Measured>> c);
-
-    /* Return the pre-computed measure (O(1) lookup). */
-    Measure getMeasure() const override { return cached; }
-
-    /* Recurse into each child and collect their characters. */
+    // Appends this one character to the output string.
     void gatherBases(std::string& out) const override;
 };
 
-// ---------------------------------------------------------------------------
-// FingerTree variants
-// ---------------------------------------------------------------------------
+/*
+ * Node (2-3 internal node)
+ * -------------------------
+ * Groups 2 or 3 child Measured objects together into a single unit.
+ * Internal nodes are what make the tree "balanced" — the middle spine
+ * of a Deep tree holds Nodes of Nodes of Nodes, each level grouping
+ * elements by 2 or 3, keeping height at O(log n).
+ *
+ * WHY: Without grouping, adding one element to the prefix when it
+ * already has 4 items would just shove an element into the middle tree.
+ * Grouping 3 of the prefix items into a Node before pushing keeps the
+ * prefix/suffix sizes bounded (1-4 items each), preserving amortised O(1)
+ * prepend/append.
+ */
+struct Node : public Measured {
+    std::vector<std::shared_ptr<Measured>> children;  // 2 or 3 children
+    Measure m;   // cached combined measure of all children
 
-/* Abstract base — lets us store any of the three shapes behind a pointer. */
-struct FingerTree {
+    explicit Node(std::vector<std::shared_ptr<Measured>> c);
+
+    // Returns the pre-cached measure (no recomputation needed).
+    Measure getMeasure() const override;
+
+    // Recursively gather all base characters from all children.
+    void gatherBases(std::string& out) const override;
+};
+
+/*
+ * FingerTree (abstract base)
+ * ---------------------------
+ * The three possible states of a Finger Tree:
+ *   Empty  — no elements at all
+ *   Single — exactly one element
+ *   Deep   — two or more elements (has a prefix, middle, and suffix)
+ *
+ * All three inherit from FingerTree so they can be stored in the same
+ * shared_ptr<FingerTree> without the caller knowing which state it is.
+ */
+class FingerTree {
+public:
     virtual ~FingerTree() = default;
+
+    // Returns the total number of DNA characters stored in this tree.
     virtual Measure getMeasure() const = 0;
+
+    // Returns true only for the Empty state.
     virtual bool isEmpty() const = 0;
 };
 
 /*
- * Empty — the base case; a sequence with no elements.
- * Measure is {0}.
+ * Empty
+ * ------
+ * Represents an empty sequence — no DNA bases at all.
+ * Acts as the identity element for concat (concat(t, Empty) == t).
  */
-struct Empty : public FingerTree {
-    Measure getMeasure() const override { return { 0 }; }
-    bool isEmpty() const override { return true; }
+class Empty : public FingerTree {
+public:
+    Measure getMeasure() const override;   // always {0}
+    bool isEmpty() const override;         // always true
 };
 
 /*
- * Single — exactly one element (a Base or a Node from a deeper level).
- * Avoids allocating prefix/suffix vectors when the tree contains just one thing.
+ * Single
+ * -------
+ * Represents a sequence with exactly one element.
+ * Sits between Empty and Deep to avoid needing empty prefix/suffix.
+ * Promotes to Deep when a second element is pushed in.
  */
-struct Single : public FingerTree {
-    std::shared_ptr<Measured> value;
+class Single : public FingerTree {
+public:
+    std::shared_ptr<Measured> val;   // the one element
 
-    explicit Single(std::shared_ptr<Measured> v) : value(v) {}
-    Measure getMeasure() const override { return value->getMeasure(); }
-    bool isEmpty() const override { return false; }
+    explicit Single(std::shared_ptr<Measured> v);
+
+    Measure getMeasure() const override;   // = val->getMeasure()
+    bool isEmpty() const override;         // always false
 };
 
 /*
- * Deep — the general case.
+ * Deep
+ * -----
+ * The normal working state once a sequence has >= 2 elements.
  *
- *   prefix  — 1-4 elements at the left "finger" (fast prepend/pop-front)
- *   middle  — a recursive FingerTree of Nodes (deeper elements)
- *   suffix  — 1-4 elements at the right "finger" (fast append/pop-back)
- *   cached  — total measure of prefix + middle + suffix
+ *   prefix  : 1-4 elements accessible from the FRONT  (the left "finger")
+ *   middle  : a recursive FingerTree<Node> holding the bulk of the data
+ *   suffix  : 1-4 elements accessible from the BACK   (the right "finger")
  *
- * WHY PREFIX AND SUFFIX HAVE AT MOST 4 ELEMENTS?
- *   When either digit grows beyond 4, the tree "overflows" three of those
- *   elements into the middle spine as a bundled Node. This keeps the digits
- *   small (O(1) access) and the height logarithmic.
+ * WHY TWO FINGERS: Biological operations frequently touch both ends.
+ * For example, reading a sequence left-to-right (motif scan) accesses
+ * the prefix constantly; a reverse-complement operation touches the
+ * suffix.  Having O(1) access to both ends avoids unnecessary traversal.
+ *
+ * The cached measure `m` = prefix sizes + middle size + suffix sizes,
+ * computed once at construction.  No traversal needed to know total length.
  */
-struct Deep : public FingerTree {
-    std::vector<std::shared_ptr<Measured>> prefix;
-    std::shared_ptr<FingerTree>            middle;
-    std::vector<std::shared_ptr<Measured>> suffix;
-    Measure cached;
+class Deep : public FingerTree {
+public:
+    std::vector<std::shared_ptr<Measured>> prefix;   // left finger  (1-4 items)
+    std::shared_ptr<FingerTree>            middle;   // recursive spine
+    std::vector<std::shared_ptr<Measured>> suffix;   // right finger (1-4 items)
+    Measure m;   // cached total measure
 
     Deep(std::vector<std::shared_ptr<Measured>> p,
          std::shared_ptr<FingerTree>            mid,
          std::vector<std::shared_ptr<Measured>> s);
 
-    Measure getMeasure() const override { return cached; }
-    bool isEmpty() const override { return false; }
+    Measure getMeasure() const override;   // returns cached m
+    bool isEmpty() const override;         // always false
 };
 
-// ---------------------------------------------------------------------------
-// Core tree operations (free functions)
-// ---------------------------------------------------------------------------
+/* =========================================================
+ *  CORE TREE OPERATIONS
+ * =========================================================
+ *
+ * All operations return a NEW tree; the original is unchanged.
+ * This is the "functional / persistent" style — safe for concurrent
+ * reads and easy to reason about correctness.
+ */
 
 /*
- * pushFront(tree, element)
- *   Add one element to the left end of the tree.
- *   Cost: O(1) amortised.
+ * pushFront
+ * ----------
+ * Adds one element to the FRONT of the sequence in O(1) amortised time.
  *
- *   Used in: building a sequence left-to-right, or after a split when we
- *   need to re-attach a head element.
+ * Analogy: threading one new bead onto the left end of the necklace.
+ * When the left hand (prefix) already holds 4 beads, it bundles 3 of
+ * them into a Node and pushes that Node down into the middle tree before
+ * accepting the new bead.  This keeps the prefix size bounded at 1-4.
+ *
+ * Used by: Sequence::insert(0, c), motif search (building a window),
+ *          chromosomal inversion (rebuilding a reversed segment).
  */
 std::shared_ptr<FingerTree> pushFront(std::shared_ptr<FingerTree> t,
                                       std::shared_ptr<Measured>   v);
 
 /*
- * pushBack(tree, element)
- *   Add one element to the right end of the tree.
- *   Cost: O(1) amortised.
+ * pushBack
+ * ---------
+ * Adds one element to the BACK of the sequence in O(1) amortised time.
+ * Mirror image of pushFront.
  *
- *   Used in: building a sequence from a DNA string character by character,
- *   and in the concatenation helper (app3).
+ * Used by: Sequence construction from a string, appending new bases,
+ *          concatenating sequences (concat calls pushBack internally).
  */
 std::shared_ptr<FingerTree> pushBack(std::shared_ptr<FingerTree> t,
                                      std::shared_ptr<Measured>   v);
 
 /*
- * concat(left, right)
- *   Merge two trees into one, preserving order.
- *   Cost: O(log n).
+ * toNodes  (helper for concat)
+ * -----------------------------
+ * Takes a flat list of elements and groups them into 2-3 Nodes.
+ * This is needed when the middle of two trees being concatenated
+ * contains leftover suffix+buffer+prefix elements that must be
+ * re-packed into proper nodes for the new middle spine.
  *
- *   Used in: Inversion (split → reverse segment → concat back),
- *   GCContent (split to isolate range → measure → concat to restore).
- *
- *   Internally delegates to app3() which threads the boundary digits
- *   through the recursive spine as grouped Nodes.
- */
-std::shared_ptr<FingerTree> concat(std::shared_ptr<FingerTree> left,
-                                   std::shared_ptr<FingerTree> right);
-
-/*
- * getSequence(tree, out)
- *   Perform an in-order traversal and append every leaf character to 'out'.
- *   Cost: O(n).
- *
- *   Used whenever you need to convert the tree back to a plain string,
- *   for example to display results or run a naive substring compare during
- *   motif search verification.
- */
-void getSequence(std::shared_ptr<FingerTree> t, std::string& out);
-
-// ---------------------------------------------------------------------------
-// Internal helper — not part of public API
-// ---------------------------------------------------------------------------
-
-/*
- * app3(left, middle_elements, right)
- *   The recursive engine behind concat(). It carries a list of "in-between"
- *   elements that need to be absorbed into the spine as Nodes. End-users
- *   should call concat() instead.
- */
-std::shared_ptr<FingerTree> app3(std::shared_ptr<FingerTree>              t1,
-                                 std::vector<std::shared_ptr<Measured>>   ts,
-                                 std::shared_ptr<FingerTree>              t2);
-
-/*
- * toNodes(elements)
- *   Bundle a flat vector of elements into 2-child or 3-child Nodes.
- *   Called by app3 to re-group the boundary digits before pushing them
- *   into the middle spine.
+ * Rule: prefer groups of 3; use a group of 2 only when needed to
+ * avoid a remainder of 1 (Nodes must have at least 2 children).
  */
 std::vector<std::shared_ptr<Measured>> toNodes(
-        std::vector<std::shared_ptr<Measured>> elements);
+    std::vector<std::shared_ptr<Measured>> b);
+
+/*
+ * app3  (the real concatenation engine)
+ * ---------------------------------------
+ * Merges two trees with a list of "middle" elements `ts` in between.
+ * Called recursively, carrying the suffix of t1 and prefix of t2
+ * as it descends through the middle spines of both trees.
+ *
+ * Public-facing wrapper: concat(t1, t2) = app3(t1, {}, t2)
+ *
+ * Time: O(log n) — only the spine depth (O(log n)) levels of recursion.
+ *
+ * WHY IT MATTERS: Chromosomal inversion = split + reverse + concat.
+ * GC content of a range = split + measure + concat back.
+ * Without O(log n) concat this would be O(n) — too slow for large genomes.
+ */
+std::shared_ptr<FingerTree> app3(std::shared_ptr<FingerTree>             t1,
+                                 std::vector<std::shared_ptr<Measured>>  ts,
+                                 std::shared_ptr<FingerTree>             t2);
+
+/*
+ * concat
+ * -------
+ * Joins two sequences end-to-end in O(log n) time.
+ *
+ * Example: concat("ATGC", "GCTA") → "ATGCGCTA"
+ *
+ * Used by: gene editing (insert = split + pushFront + concat),
+ *          inversion (split + reverse + concat),
+ *          any operation that temporarily dismantles and re-joins the tree.
+ */
+std::shared_ptr<FingerTree> concat(std::shared_ptr<FingerTree> t1,
+                                   std::shared_ptr<FingerTree> t2);
+
+/*
+ * split
+ * ------
+ * Divides the sequence at position `i` into two trees:
+ *   left  — characters [0 .. i-1]
+ *   right — characters [i .. n-1]
+ *
+ * Time: O(log n) — uses cached measures to navigate without visiting
+ * every element.
+ *
+ * Used by:
+ *   - Sequence::insert(i, c)  → split at i, pushFront c onto right, concat
+ *   - Sequence::remove(i)     → split at i, split right at 1, concat
+ *   - GCContent::calculate()  → split at left, split at right, measure middle
+ *   - Inversion::invert()     → split at left, split at right, reverse middle, concat
+ *   - MotifSearch::findMotif()→ extract a window of length |motif| to compare
+ */
+std::pair<std::shared_ptr<FingerTree>, std::shared_ptr<FingerTree>>
+split(std::shared_ptr<FingerTree> t, size_t i);
+
+/*
+ * getSequence
+ * ------------
+ * Traverses the entire tree in order and appends every DNA character
+ * to the output string `out`.
+ *
+ * Time: O(n) — must visit all n leaves.
+ *
+ * Used by: Sequence::toString(), printing results, building substrings
+ *          during motif search window extraction.
+ */
+void getSequence(std::shared_ptr<FingerTree> t, std::string& out);
 
 #endif // FINGERTREE_H

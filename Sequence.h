@@ -1,3 +1,4 @@
+//specific to DNA sequence management using Finger Trees
 /*
  * Sequence.h
  * ----------
